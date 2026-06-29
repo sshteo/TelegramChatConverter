@@ -1,0 +1,17 @@
+D:\TelegramChatConverte\bin\Debug\net8.0\TelegramChatConverter.exe
+D:\TelegramChatConverte\bin\Debug\net8.0\TelegramChatConverter.deps.json
+D:\TelegramChatConverte\bin\Debug\net8.0\TelegramChatConverter.runtimeconfig.json
+D:\TelegramChatConverte\bin\Debug\net8.0\TelegramChatConverter.dll
+D:\TelegramChatConverte\bin\Debug\net8.0\TelegramChatConverter.pdb
+D:\TelegramChatConverte\bin\Debug\net8.0\HtmlAgilityPack.dll
+D:\TelegramChatConverte\obj\Debug\net8.0\TelegramChatConverter.csproj.AssemblyReference.cache
+D:\TelegramChatConverte\obj\Debug\net8.0\TelegramChatConverter.GeneratedMSBuildEditorConfig.editorconfig
+D:\TelegramChatConverte\obj\Debug\net8.0\TelegramChatConverter.AssemblyInfoInputs.cache
+D:\TelegramChatConverte\obj\Debug\net8.0\TelegramChatConverter.AssemblyInfo.cs
+D:\TelegramChatConverte\obj\Debug\net8.0\TelegramChatConverter.csproj.CoreCompileInputs.cache
+D:\TelegramChatConverte\obj\Debug\net8.0\Telegram.E4883425.Up2Date
+D:\TelegramChatConverte\obj\Debug\net8.0\TelegramChatConverter.dll
+D:\TelegramChatConverte\obj\Debug\net8.0\refint\TelegramChatConverter.dll
+D:\TelegramChatConverte\obj\Debug\net8.0\TelegramChatConverter.pdb
+D:\TelegramChatConverte\obj\Debug\net8.0\TelegramChatConverter.genruntimeconfig.cache
+D:\TelegramChatConverte\obj\Debug\net8.0\ref\TelegramChatConverter.dll
