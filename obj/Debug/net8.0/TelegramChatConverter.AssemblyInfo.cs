@@ -13,7 +13,7 @@ using System.Reflection;
 [assembly: System.Reflection.AssemblyCompanyAttribute("TelegramChatConverter")]
 [assembly: System.Reflection.AssemblyConfigurationAttribute("Debug")]
 [assembly: System.Reflection.AssemblyFileVersionAttribute("1.0.0.0")]
-[assembly: System.Reflection.AssemblyInformationalVersionAttribute("1.0.0+6023cc0db50afe393d3216315d0f5e16a90fe357")]
+[assembly: System.Reflection.AssemblyInformationalVersionAttribute("1.0.0+6955a42184e55a6bb8b88b473c502e60fdbd91cb")]
 [assembly: System.Reflection.AssemblyProductAttribute("TelegramChatConverter")]
 [assembly: System.Reflection.AssemblyTitleAttribute("TelegramChatConverter")]
 [assembly: System.Reflection.AssemblyVersionAttribute("1.0.0.0")]
