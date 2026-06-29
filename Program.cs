@@ -1,15 +1,20 @@
 using System.Text;
+using System.Text.RegularExpressions;
 using HtmlAgilityPack;
+using DocumentFormat.OpenXml;
+using DocumentFormat.OpenXml.Packaging;
+using DocumentFormat.OpenXml.Wordprocessing;
 
 namespace TelegramChatConverter;
 
 class Program
 {
+    private const int MAX_MESSAGES_PER_FILE = 50000;
+    
     static async Task Main(string[] args)
     {
         Console.WriteLine("=== Telegram HTML to TXT Converter ===\n");
 
-        // Получаем путь к папке с экспортом
         string? folderPath = args.Length > 0 ? args[0] : null;
         
         while (string.IsNullOrEmpty(folderPath) || !Directory.Exists(folderPath))
@@ -28,65 +33,221 @@ class Program
             }
         }
 
-        // Ищем все файлы messages*.html
+        // Выбор формата
+        Console.WriteLine("\nВыберите формат сохранения:");
+        Console.WriteLine("  1. TXT (простой текст, разбивается на части)");
+        Console.WriteLine("  2. DOCX (Microsoft Word, один файл)");
+        Console.Write("Ваш выбор (1 или 2): ");
+        string? formatChoice = Console.ReadLine()?.Trim();
+        
+        bool useDocx = formatChoice == "2";
+        
+        if (useDocx)
+            Console.WriteLine("\n📄 Выбран формат DOCX (Word) — отлично подходит для больших чатов!");
+        else
+            Console.WriteLine("\n📄 Выбран формат TXT");
+
+        // ⭐ ГЛАВНОЕ ИЗМЕНЕНИЕ ЗДЕСЬ — натуральная сортировка
         var htmlFiles = Directory.GetFiles(folderPath, "messages*.html")
-            .OrderBy(f => f)
+            .OrderBy(f => ExtractNumber(f))
             .ToList();
 
         if (htmlFiles.Count == 0)
         {
             Console.WriteLine("Файлы messages*.html не найдены в указанной папке.");
-            Console.WriteLine($"Поиск в: {folderPath}");
             return;
         }
 
-        Console.WriteLine($"Найдено HTML-файлов: {htmlFiles.Count}");
-        Console.WriteLine();
-
-        // Создаём один общий TXT-файл
-        string outputFile = Path.Combine(folderPath, "chat_export.txt");
+        Console.WriteLine($"\nНайдено HTML-файлов: {htmlFiles.Count}");
+        Console.WriteLine("Порядок файлов (первые 10):");
+        for (int i = 0; i < Math.Min(10, htmlFiles.Count); i++)
+        {
+            Console.WriteLine($"  {i+1}. {Path.GetFileName(htmlFiles[i])}");
+        }
+        if (htmlFiles.Count > 10)
+            Console.WriteLine($"  ... и еще {htmlFiles.Count - 10} файлов");
         
-        using var writer = new StreamWriter(outputFile, false, Encoding.UTF8);
-        
-        int totalMessages = 0;
-        int totalFiles = 0;
+        Console.WriteLine("\nНачинаю обработку...\n");
 
+        var allMessages = new List<Message>();
+        int processedFiles = 0;
+        
         foreach (var htmlFile in htmlFiles)
         {
-            Console.WriteLine($"Обработка: {Path.GetFileName(htmlFile)}");
-            
             try
             {
                 var messages = await ParseHtmlFileAsync(htmlFile);
-                totalMessages += messages.Count;
-                
                 if (messages.Count > 0)
                 {
-                    totalFiles++;
+                    allMessages.AddRange(messages);
+                    processedFiles++;
                     
-                    foreach (var msg in messages)
+                    if (processedFiles % 10 == 0)
                     {
-                        await writer.WriteLineAsync($"{msg.Date} / {msg.Sender}");
-                        await writer.WriteLineAsync($"{msg.Text};");
-                        await writer.WriteLineAsync(); // Пустая строка между сообщениями
+                        Console.Write($"\rОбработано файлов: {processedFiles}/{htmlFiles.Count}, собрано сообщений: {allMessages.Count:N0}");
                     }
                 }
-                
-                Console.WriteLine($"  Добавлено сообщений: {messages.Count}");
             }
             catch (Exception ex)
             {
-                Console.WriteLine($"  Ошибка при обработке: {ex.Message}");
+                Console.WriteLine($"\n  Ошибка в файле {Path.GetFileName(htmlFile)}: {ex.Message}");
             }
+        }
+        
+        Console.WriteLine($"\rОбработано файлов: {processedFiles}/{htmlFiles.Count}, собрано сообщений: {allMessages.Count:N0}");
+        Console.WriteLine();
+
+        if (allMessages.Count == 0)
+        {
+            Console.WriteLine("Не найдено ни одного сообщения.");
+            return;
+        }
+
+        // Сохраняем в выбранном формате
+        if (useDocx)
+        {
+            await SaveAsDocxAsync(folderPath, allMessages);
+        }
+        else
+        {
+            await SaveAsTxtAsync(folderPath, allMessages);
+        }
+
+        Console.WriteLine("\nНажмите любую клавишу для выхода...");
+        Console.ReadKey();
+    }
+
+    // ⭐ НОВЫЙ МЕТОД — извлекает номер из имени файла
+    static int ExtractNumber(string filePath)
+    {
+        string fileName = Path.GetFileNameWithoutExtension(filePath);
+        
+        // messages.html — это первый файл (номер 0)
+        if (fileName.Equals("messages", StringComparison.OrdinalIgnoreCase))
+            return 0;
+        
+        // Ищем число в названии (messages123.html)
+        var match = Regex.Match(fileName, @"messages(\d+)", RegexOptions.IgnoreCase);
+        if (match.Success && int.TryParse(match.Groups[1].Value, out int number))
+            return number;
+        
+        // Если что-то пошло не так — ставим в конец
+        return int.MaxValue;
+    }
+
+    static async Task SaveAsTxtAsync(string folderPath, List<Message> allMessages)
+    {
+        int fileCounter = 1;
+        int totalWritten = 0;
+        var fileNames = new List<string>();
+        
+        Console.WriteLine($"\nСохраняю в TXT (по {MAX_MESSAGES_PER_FILE} сообщений)...");
+        
+        while (totalWritten < allMessages.Count)
+        {
+            var chunk = allMessages.Skip(totalWritten).Take(MAX_MESSAGES_PER_FILE).ToList();
+            
+            string outputFile;
+            if (fileCounter == 1)
+                outputFile = Path.Combine(folderPath, "chat_export.txt");
+            else
+                outputFile = Path.Combine(folderPath, $"chat_export_part{fileCounter}.txt");
+            
+            await WriteMessagesToTxtAsync(outputFile, chunk);
+            
+            long fileSizeKB = new FileInfo(outputFile).Length / 1024;
+            Console.WriteLine($"  Часть {fileCounter}: {Path.GetFileName(outputFile)} ({chunk.Count} сообщений, {fileSizeKB:N0} КБ)");
+            
+            fileNames.Add(Path.GetFileName(outputFile));
+            totalWritten += chunk.Count;
+            fileCounter++;
         }
 
         Console.WriteLine($"\n✅ Готово!");
-        Console.WriteLine($"Обработано файлов: {totalFiles}");
-        Console.WriteLine($"Всего сообщений: {totalMessages}");
-        Console.WriteLine($"Результат сохранён в: {outputFile}");
+        Console.WriteLine($"📁 Создано TXT-файлов: {fileCounter - 1}");
+        Console.WriteLine($"📝 Всего сообщений: {totalWritten:N0}");
+        Console.WriteLine($"📂 Файлы сохранены в: {folderPath}");
+    }
+
+    static async Task SaveAsDocxAsync(string folderPath, List<Message> allMessages)
+    {
+        Console.WriteLine("\n📄 Создаю DOCX-файл...");
         
-        Console.WriteLine("\nНажмите любую клавишу для выхода...");
-        Console.ReadKey();
+        string outputFile = Path.Combine(folderPath, "chat_export.docx");
+        
+        await Task.Run(() =>
+        {
+            using (var wordDocument = WordprocessingDocument.Create(outputFile, WordprocessingDocumentType.Document))
+            {
+                var mainPart = wordDocument.AddMainDocumentPart();
+                mainPart.Document = new Document();
+                var body = mainPart.Document.AppendChild(new Body());
+
+                // Заголовок
+                var titleParagraph = new Paragraph();
+                var titleRun = new Run();
+                titleRun.AppendChild(new Bold());
+                titleRun.AppendChild(new FontSize { Val = "28" });
+                titleRun.AppendChild(new Text($"Экспорт чата Telegram\nВсего сообщений: {allMessages.Count:N0}\nДата: {DateTime.Now:dd.MM.yyyy}\n"));
+                titleParagraph.AppendChild(titleRun);
+                body.AppendChild(titleParagraph);
+
+                body.AppendChild(new Paragraph(new Run(new Text(new string('-', 80)))));
+
+                int messageCounter = 0;
+                int progressStep = Math.Max(1000, allMessages.Count / 100);
+                
+                foreach (var msg in allMessages)
+                {
+                    messageCounter++;
+                    
+                    // Дата и отправитель (жирным)
+                    var headerParagraph = new Paragraph();
+                    var headerRun = new Run();
+                    headerRun.AppendChild(new Bold());
+                    headerRun.AppendChild(new Text($"{msg.Date} / {msg.Sender}"));
+                    headerParagraph.AppendChild(headerRun);
+                    body.AppendChild(headerParagraph);
+
+                    // Текст сообщения
+                    var textParagraph = new Paragraph();
+                    var textRun = new Run();
+                    textRun.AppendChild(new Text($"{msg.Text};"));
+                    textParagraph.AppendChild(textRun);
+                    body.AppendChild(textParagraph);
+
+                    body.AppendChild(new Paragraph());
+
+                    if (messageCounter % progressStep == 0)
+                    {
+                        int percent = (int)((double)messageCounter / allMessages.Count * 100);
+                        Console.Write($"\r  Прогресс: {percent}% ({messageCounter:N0}/{allMessages.Count:N0})");
+                    }
+                }
+
+                Console.Write($"\r  Прогресс: 100% ({allMessages.Count:N0}/{allMessages.Count:N0})");
+                Console.WriteLine();
+            }
+        });
+
+        long fileSizeKB = new FileInfo(outputFile).Length / 1024;
+        Console.WriteLine($"\n✅ Готово!");
+        Console.WriteLine($"📄 Файл: {Path.GetFileName(outputFile)}");
+        Console.WriteLine($"📝 Сообщений: {allMessages.Count:N0}");
+        Console.WriteLine($"📦 Размер: {fileSizeKB:N0} КБ ({fileSizeKB / 1024:N2} МБ)");
+        Console.WriteLine($"📂 Сохранен в: {folderPath}");
+    }
+
+    static async Task WriteMessagesToTxtAsync(string filePath, List<Message> messages)
+    {
+        using var writer = new StreamWriter(filePath, false, Encoding.UTF8);
+        
+        foreach (var msg in messages)
+        {
+            await writer.WriteLineAsync($"{msg.Date} / {msg.Sender}");
+            await writer.WriteLineAsync($"{msg.Text};");
+            await writer.WriteLineAsync();
+        }
     }
 
     static async Task<List<Message>> ParseHtmlFileAsync(string filePath)
@@ -97,7 +258,6 @@ class Program
         var doc = new HtmlDocument();
         doc.LoadHtml(html);
 
-        // Находим все блоки сообщений
         var messageNodes = doc.DocumentNode.SelectNodes("//div[contains(@class, 'message')]");
         
         if (messageNodes == null) 
@@ -108,117 +268,96 @@ class Program
 
         foreach (var node in messageNodes)
         {
-            // Проверяем служебное сообщение с датой
-            if (node.GetAttributeValue("class", "").Contains("service"))
+            try
             {
-                var dateNode = node.SelectSingleNode(".//div[contains(@class, 'details')]");
-                if (dateNode != null)
+                if (node.GetAttributeValue("class", "").Contains("service"))
                 {
-                    currentDate = dateNode.InnerText.Trim();
-                }
-                continue;
-            }
-
-            // Обычное сообщение
-            var dateElement = node.SelectSingleNode(".//div[contains(@class, 'date')]");
-            var senderElement = node.SelectSingleNode(".//div[contains(@class, 'from_name')]");
-            var textElement = node.SelectSingleNode(".//div[contains(@class, 'text')]");
-
-            // Получаем дату (время)
-            string time = dateElement?.InnerText.Trim() ?? "";
-            
-            // Получаем отправителя
-            string sender = senderElement?.InnerText.Trim() ?? "";
-            if (!string.IsNullOrEmpty(sender))
-                currentSender = sender;
-
-            // Получаем текст сообщения
-            string messageText = "";
-            if (textElement != null)
-            {
-                // Проверяем, не является ли сообщение стикером или медиа
-                var mediaWrap = textElement.SelectSingleNode(".//div[contains(@class, 'media_wrap')]");
-                if (mediaWrap != null)
-                {
-                    // Это медиа-сообщение, пропускаем или отмечаем как [Медиа]
-                    var title = mediaWrap.SelectSingleNode(".//div[contains(@class, 'title')]");
-                    if (title != null && title.InnerText.Contains("Sticker"))
+                    var dateNode = node.SelectSingleNode(".//div[contains(@class, 'details')]");
+                    if (dateNode != null)
                     {
-                        messageText = "[Стикер]";
+                        currentDate = dateNode.InnerText.Trim();
                     }
-                    else if (title != null && title.InnerText.Contains("Photo"))
+                    continue;
+                }
+
+                var dateElement = node.SelectSingleNode(".//div[contains(@class, 'date')]");
+                var senderElement = node.SelectSingleNode(".//div[contains(@class, 'from_name')]");
+                var textElement = node.SelectSingleNode(".//div[contains(@class, 'text')]");
+
+                string time = dateElement?.InnerText.Trim() ?? "";
+                
+                string sender = senderElement?.InnerText.Trim() ?? "";
+                if (!string.IsNullOrEmpty(sender))
+                    currentSender = sender;
+
+                string messageText = "";
+                if (textElement != null)
+                {
+                    var mediaWrap = textElement.SelectSingleNode(".//div[contains(@class, 'media_wrap')]");
+                    if (mediaWrap != null)
                     {
-                        messageText = "[Фото]";
+                        var title = mediaWrap.SelectSingleNode(".//div[contains(@class, 'title')]");
+                        if (title != null && title.InnerText.Contains("Sticker"))
+                            messageText = "[Стикер]";
+                        else if (title != null && title.InnerText.Contains("Photo"))
+                            messageText = "[Фото]";
+                        else
+                            messageText = "[Медиа]";
                     }
                     else
                     {
-                        messageText = "[Медиа]";
-                    }
-                }
-                else
-                {
-                    // Текстовое сообщение - очищаем от лишних тегов
-                    messageText = textElement.InnerText.Trim();
-                    
-                    // Убираем ссылки типа "In reply to this message"
-                    if (messageText.Contains("In reply to"))
-                    {
-                        var replyPart = textElement.SelectSingleNode(".//div[contains(@class, 'reply_to')]");
-                        if (replyPart != null)
+                        messageText = textElement.InnerText.Trim();
+                        
+                        if (messageText.Contains("In reply to"))
                         {
-                            var replyText = replyPart.InnerText.Trim();
-                            // Оставляем только сам текст после ответа
-                            var textNodes = textElement.SelectNodes("./text()");
-                            if (textNodes != null)
+                            var replyPart = textElement.SelectSingleNode(".//div[contains(@class, 'reply_to')]");
+                            if (replyPart != null)
                             {
-                                var actualText = string.Join("", textNodes.Select(n => n.InnerText.Trim()));
-                                if (!string.IsNullOrEmpty(actualText))
-                                    messageText = actualText;
+                                var textNodes = textElement.SelectNodes("./text()");
+                                if (textNodes != null)
+                                {
+                                    var actualText = string.Join("", textNodes.Select(n => n.InnerText.Trim()));
+                                    if (!string.IsNullOrEmpty(actualText))
+                                        messageText = actualText;
+                                }
                             }
                         }
                     }
                 }
-            }
 
-            // Формируем дату для сообщения
-            string fullDate = currentDate;
-            if (!string.IsNullOrEmpty(time))
-            {
-                // Если есть время, добавляем его к дате
-                if (!string.IsNullOrEmpty(fullDate))
+                string fullDate = currentDate;
+                if (!string.IsNullOrEmpty(time))
                 {
-                    // Парсим дату из service сообщения и добавляем время
-                    // В HTML время указано в формате "13:34", дата - "23 June 2023"
-                    // Преобразуем в читаемый формат
-                    var dateParts = fullDate.Split(' ');
+                    var dateParts = currentDate.Split(' ');
                     if (dateParts.Length >= 3)
                     {
-                        // Формат: "23 June 2023" -> "23.06.2023"
                         var day = dateParts[0];
                         var month = GetMonthNumber(dateParts[1]);
                         var year = dateParts[2];
                         fullDate = $"{day}.{month}.{year}";
                     }
+                    
+                    if (!string.IsNullOrEmpty(time))
+                        fullDate = $"{fullDate} {time}";
                 }
-                
-                if (!string.IsNullOrEmpty(time))
-                    fullDate = $"{fullDate} {time}";
+
+                if (string.IsNullOrEmpty(currentSender))
+                    currentSender = "Unknown";
+
+                if (string.IsNullOrEmpty(messageText))
+                    continue;
+
+                messages.Add(new Message
+                {
+                    Date = fullDate,
+                    Sender = currentSender,
+                    Text = messageText
+                });
             }
-
-            // Если нет отправителя, используем последнего известного
-            if (string.IsNullOrEmpty(currentSender))
-                currentSender = "Unknown";
-
-            // Пропускаем пустые сообщения
-            if (string.IsNullOrEmpty(messageText))
-                continue;
-
-            messages.Add(new Message
+            catch
             {
-                Date = fullDate,
-                Sender = currentSender,
-                Text = messageText
-            });
+                // Пропускаем проблемное сообщение
+            }
         }
 
         return messages;
