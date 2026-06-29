@@ -1,75 +1,106 @@
 using System.Text;
 using System.Text.RegularExpressions;
+using System.Text.Json;
 using HtmlAgilityPack;
-using DocumentFormat.OpenXml;
-using DocumentFormat.OpenXml.Packaging;
-using DocumentFormat.OpenXml.Wordprocessing;
+
 
 namespace TelegramChatConverter;
 
 class Program
 {
     private const int MAX_MESSAGES_PER_FILE = 50000;
+    private static List<Message> allMessages = new();
+    private static string? outputFolder;
+    private static string? fileNameBase;
     
     static async Task Main(string[] args)
     {
-        Console.WriteLine("=== Telegram HTML to TXT Converter ===\n");
+        Console.WriteLine("=== Telegram HTML to TXT Converter by shteo ===\n");
 
-        string? folderPath = args.Length > 0 ? args[0] : null;
+        // 1. Выбор папки с экспортом
+string? folderPath = null;
+
+// Проверяем, передан ли путь через аргументы командной строки
+if (args.Length > 0 && Directory.Exists(args[0]))
+{
+    folderPath = args[0];
+    Console.WriteLine($"Использую папку из аргументов: {folderPath}");
+}
+else
+{
+    Console.WriteLine("Выберите папку с экспортом Telegram...");
+    Console.WriteLine("💡 Подсказка: скопируйте путь к папке в проводнике (в адресе не должны быть пробелы и символы кроме английского языка)");
+    Console.WriteLine("   (например: D:\\Downloads\\Telegram Desktop\\ChatExport_2026-06-29)");
+    
+    while (string.IsNullOrEmpty(folderPath) || !Directory.Exists(folderPath))
+    {
+        if (!string.IsNullOrEmpty(folderPath))
+            Console.WriteLine($"❌ Папка '{folderPath}' не найдена.");
         
-        while (string.IsNullOrEmpty(folderPath) || !Directory.Exists(folderPath))
+        Console.Write("\nВведите путь к папке с экспортом: ");
+        folderPath = Console.ReadLine()?.Trim();
+        
+        if (string.IsNullOrEmpty(folderPath))
         {
-            if (!string.IsNullOrEmpty(folderPath))
-                Console.WriteLine($"Папка '{folderPath}' не найдена.");
-            
-            Console.Write("Введите путь к папке с экспортом Telegram: ");
-            folderPath = Console.ReadLine()?.Trim();
-            
-            if (string.IsNullOrEmpty(folderPath))
-            {
-                folderPath = Directory.GetCurrentDirectory();
-                Console.WriteLine($"Использую текущую папку: {folderPath}");
-                break;
-            }
+            folderPath = Directory.GetCurrentDirectory();
+            Console.WriteLine($"Использую текущую папку: {folderPath}");
+            break;
+        }
+    }
+}
+
+// Проверяем, есть ли файлы в папке
+if (!Directory.Exists(folderPath))
+{
+    Console.WriteLine($"❌ Папка '{folderPath}' не существует.");
+    Console.WriteLine("Нажмите любую клавишу для выхода...");
+    Console.ReadKey();
+    return;
+}
+        // Проверяем, есть ли файлы в папке
+        if (!Directory.Exists(folderPath))
+        {
+            Console.WriteLine($"❌ Папка '{folderPath}' не существует.");
+            Console.WriteLine("Нажмите любую клавишу для выхода...");
+            Console.ReadKey();
+            return;
         }
 
-        // Выбор формата
-        Console.WriteLine("\nВыберите формат сохранения:");
-        Console.WriteLine("  1. TXT (простой текст, разбивается на части)");
-        Console.WriteLine("  2. DOCX (Microsoft Word, один файл)");
-        Console.Write("Ваш выбор (1 или 2): ");
-        string? formatChoice = Console.ReadLine()?.Trim();
+        // 2. Выбор места сохранения
+        Console.Write("\nВведите папку для сохранения результатов (Enter = та же папка): ");
+        outputFolder = Console.ReadLine()?.Trim();
+        if (string.IsNullOrEmpty(outputFolder))
+            outputFolder = folderPath;
         
-        bool useDocx = formatChoice == "2";
-        
-        if (useDocx)
-            Console.WriteLine("\n📄 Выбран формат DOCX (Word) — отлично подходит для больших чатов!");
-        else
-            Console.WriteLine("\n📄 Выбран формат TXT");
+        if (!Directory.Exists(outputFolder))
+        {
+            Directory.CreateDirectory(outputFolder);
+            Console.WriteLine($"Создана папка: {outputFolder}");
+        }
 
-        // ⭐ ГЛАВНОЕ ИЗМЕНЕНИЕ ЗДЕСЬ — натуральная сортировка
+        // 3. Ввод названия файла
+        Console.Write("Введите название для файлов (Enter = chat_export): ");
+        fileNameBase = Console.ReadLine()?.Trim();
+        if (string.IsNullOrEmpty(fileNameBase))
+            fileNameBase = "chat_export";
+
+        // 4. Поиск и сортировка файлов
         var htmlFiles = Directory.GetFiles(folderPath, "messages*.html")
             .OrderBy(f => ExtractNumber(f))
             .ToList();
 
         if (htmlFiles.Count == 0)
         {
-            Console.WriteLine("Файлы messages*.html не найдены в указанной папке.");
+            Console.WriteLine($"❌ Файлы messages*.html не найдены в папке: {folderPath}");
+            Console.WriteLine("Нажмите любую клавишу для выхода...");
+            Console.ReadKey();
             return;
         }
 
-        Console.WriteLine($"\nНайдено HTML-файлов: {htmlFiles.Count}");
-        Console.WriteLine("Порядок файлов (первые 10):");
-        for (int i = 0; i < Math.Min(10, htmlFiles.Count); i++)
-        {
-            Console.WriteLine($"  {i+1}. {Path.GetFileName(htmlFiles[i])}");
-        }
-        if (htmlFiles.Count > 10)
-            Console.WriteLine($"  ... и еще {htmlFiles.Count - 10} файлов");
-        
-        Console.WriteLine("\nНачинаю обработку...\n");
+        Console.WriteLine($"\n📁 Найдено HTML-файлов: {htmlFiles.Count}");
+        Console.WriteLine("Начинаю обработку...\n");
 
-        var allMessages = new List<Message>();
+        // 5. Парсинг всех сообщений
         int processedFiles = 0;
         
         foreach (var htmlFile in htmlFiles)
@@ -99,47 +130,70 @@ class Program
 
         if (allMessages.Count == 0)
         {
-            Console.WriteLine("Не найдено ни одного сообщения.");
+            Console.WriteLine("❌ Не найдено ни одного сообщения.");
+            Console.WriteLine("Нажмите любую клавишу для выхода...");
+            Console.ReadKey();
             return;
         }
 
-        // Сохраняем в выбранном формате
-        if (useDocx)
+        // 6. Меню действий
+        bool exit = false;
+        while (!exit)
         {
-            await SaveAsDocxAsync(folderPath, allMessages);
-        }
-        else
-        {
-            await SaveAsTxtAsync(folderPath, allMessages);
-        }
+            Console.WriteLine("\n=== МЕНЮ ===");
+            Console.WriteLine("1. Сохранить в TXT (с разбивкой на части по 50000 символов)");
+            Console.WriteLine("2. Сохранить в DOCX (один файл)");
+            Console.WriteLine("3. Сохранить в JSON");
+            Console.WriteLine("4. Сохранить в CSV (с разделением даты и времени)");
+            Console.WriteLine("5. Показать статистику чата");
+            Console.WriteLine("6. Экспорт по дате (фильтрация)");
+            Console.WriteLine("7. ВСЁ СРАЗУ (все форматы + статистика)");
+            Console.WriteLine("0. Выход");
+            Console.Write("\nВаш выбор: ");
+            
+            string? choice = Console.ReadLine()?.Trim();
+            Console.WriteLine();
 
-        Console.WriteLine("\nНажмите любую клавишу для выхода...");
-        Console.ReadKey();
+            switch (choice)
+            {
+                case "1":
+                    await SaveAsTxtAsync();
+                    break;
+                case "2":
+                    await SaveAsDocxAsync();
+                    break;
+                case "3":
+                    await SaveAsJsonAsync();
+                    break;
+                case "4":
+                    await SaveAsCsvAsync();
+                    break;
+                case "5":
+                    ShowStatistics();
+                    break;
+                case "6":
+                    await ExportByDateAsync();
+                    break;
+                case "7":
+                    await SaveAllFormatsAsync();
+                    break;
+                case "0":
+                    exit = true;
+                    Console.WriteLine("До свидания! shteo благодарит Вас");
+                    break;
+                default:
+                    Console.WriteLine("Неверный выбор. Попробуйте снова.");
+                    break;
+            }
+        }
     }
 
-    // ⭐ НОВЫЙ МЕТОД — извлекает номер из имени файла
-    static int ExtractNumber(string filePath)
-    {
-        string fileName = Path.GetFileNameWithoutExtension(filePath);
-        
-        // messages.html — это первый файл (номер 0)
-        if (fileName.Equals("messages", StringComparison.OrdinalIgnoreCase))
-            return 0;
-        
-        // Ищем число в названии (messages123.html)
-        var match = Regex.Match(fileName, @"messages(\d+)", RegexOptions.IgnoreCase);
-        if (match.Success && int.TryParse(match.Groups[1].Value, out int number))
-            return number;
-        
-        // Если что-то пошло не так — ставим в конец
-        return int.MaxValue;
-    }
+    // ========== ОСНОВНЫЕ ФУНКЦИИ ==========
 
-    static async Task SaveAsTxtAsync(string folderPath, List<Message> allMessages)
+    static async Task SaveAsTxtAsync()
     {
         int fileCounter = 1;
         int totalWritten = 0;
-        var fileNames = new List<string>();
         
         Console.WriteLine($"\nСохраняю в TXT (по {MAX_MESSAGES_PER_FILE} сообщений)...");
         
@@ -149,50 +203,46 @@ class Program
             
             string outputFile;
             if (fileCounter == 1)
-                outputFile = Path.Combine(folderPath, "chat_export.txt");
+                outputFile = Path.Combine(outputFolder!, $"{fileNameBase}.txt");
             else
-                outputFile = Path.Combine(folderPath, $"chat_export_part{fileCounter}.txt");
+                outputFile = Path.Combine(outputFolder!, $"{fileNameBase}_part{fileCounter}.txt");
             
             await WriteMessagesToTxtAsync(outputFile, chunk);
             
             long fileSizeKB = new FileInfo(outputFile).Length / 1024;
             Console.WriteLine($"  Часть {fileCounter}: {Path.GetFileName(outputFile)} ({chunk.Count} сообщений, {fileSizeKB:N0} КБ)");
             
-            fileNames.Add(Path.GetFileName(outputFile));
             totalWritten += chunk.Count;
             fileCounter++;
         }
 
-        Console.WriteLine($"\n✅ Готово!");
-        Console.WriteLine($"📁 Создано TXT-файлов: {fileCounter - 1}");
-        Console.WriteLine($"📝 Всего сообщений: {totalWritten:N0}");
-        Console.WriteLine($"📂 Файлы сохранены в: {folderPath}");
+        Console.WriteLine($"\n✅ TXT сохранён! Всего файлов: {fileCounter - 1}");
     }
 
-    static async Task SaveAsDocxAsync(string folderPath, List<Message> allMessages)
+    static async Task SaveAsDocxAsync()
     {
         Console.WriteLine("\n📄 Создаю DOCX-файл...");
         
-        string outputFile = Path.Combine(folderPath, "chat_export.docx");
+        string outputFile = Path.Combine(outputFolder!, $"{fileNameBase}.docx");
         
         await Task.Run(() =>
         {
-            using (var wordDocument = WordprocessingDocument.Create(outputFile, WordprocessingDocumentType.Document))
+            using (var wordDocument = DocumentFormat.OpenXml.Packaging.WordprocessingDocument.Create(outputFile, DocumentFormat.OpenXml.WordprocessingDocumentType.Document))
             {
                 var mainPart = wordDocument.AddMainDocumentPart();
-                mainPart.Document = new Document();
-                var body = mainPart.Document.AppendChild(new Body());
+                mainPart.Document = new DocumentFormat.OpenXml.Wordprocessing.Document();
+                var body = mainPart.Document.AppendChild(new DocumentFormat.OpenXml.Wordprocessing.Body());
 
                 // Заголовок
-                var titleParagraph = new Paragraph();
-                var titleRun = new Run();
-                titleRun.AppendChild(new Bold());
-                titleRun.AppendChild(new FontSize { Val = "28" });
-                titleRun.AppendChild(new Text($"Экспорт чата Telegram\nВсего сообщений: {allMessages.Count:N0}\nДата: {DateTime.Now:dd.MM.yyyy}\n"));
+                var titleParagraph = new DocumentFormat.OpenXml.Wordprocessing.Paragraph();
+                var titleRun = new DocumentFormat.OpenXml.Wordprocessing.Run();
+                titleRun.AppendChild(new DocumentFormat.OpenXml.Wordprocessing.Bold());
+                titleRun.AppendChild(new DocumentFormat.OpenXml.Wordprocessing.FontSize { Val = "28" });
+                titleRun.AppendChild(new DocumentFormat.OpenXml.Wordprocessing.Text($"Экспорт чата Telegram\nВсего сообщений: {allMessages.Count:N0}\nДата: {DateTime.Now:dd.MM.yyyy}\n"));
                 titleParagraph.AppendChild(titleRun);
                 body.AppendChild(titleParagraph);
 
-                body.AppendChild(new Paragraph(new Run(new Text(new string('-', 80)))));
+                body.AppendChild(new DocumentFormat.OpenXml.Wordprocessing.Paragraph(new DocumentFormat.OpenXml.Wordprocessing.Run(new DocumentFormat.OpenXml.Wordprocessing.Text(new string('-', 80)))));
 
                 int messageCounter = 0;
                 int progressStep = Math.Max(1000, allMessages.Count / 100);
@@ -201,22 +251,20 @@ class Program
                 {
                     messageCounter++;
                     
-                    // Дата и отправитель (жирным)
-                    var headerParagraph = new Paragraph();
-                    var headerRun = new Run();
-                    headerRun.AppendChild(new Bold());
-                    headerRun.AppendChild(new Text($"{msg.Date} / {msg.Sender}"));
+                    var headerParagraph = new DocumentFormat.OpenXml.Wordprocessing.Paragraph();
+                    var headerRun = new DocumentFormat.OpenXml.Wordprocessing.Run();
+                    headerRun.AppendChild(new DocumentFormat.OpenXml.Wordprocessing.Bold());
+                    headerRun.AppendChild(new DocumentFormat.OpenXml.Wordprocessing.Text($"{msg.Date} / {msg.Sender}"));
                     headerParagraph.AppendChild(headerRun);
                     body.AppendChild(headerParagraph);
 
-                    // Текст сообщения
-                    var textParagraph = new Paragraph();
-                    var textRun = new Run();
-                    textRun.AppendChild(new Text($"{msg.Text};"));
+                    var textParagraph = new DocumentFormat.OpenXml.Wordprocessing.Paragraph();
+                    var textRun = new DocumentFormat.OpenXml.Wordprocessing.Run();
+                    textRun.AppendChild(new DocumentFormat.OpenXml.Wordprocessing.Text($"{msg.Text};"));
                     textParagraph.AppendChild(textRun);
                     body.AppendChild(textParagraph);
 
-                    body.AppendChild(new Paragraph());
+                    body.AppendChild(new DocumentFormat.OpenXml.Wordprocessing.Paragraph());
 
                     if (messageCounter % progressStep == 0)
                     {
@@ -231,11 +279,219 @@ class Program
         });
 
         long fileSizeKB = new FileInfo(outputFile).Length / 1024;
-        Console.WriteLine($"\n✅ Готово!");
-        Console.WriteLine($"📄 Файл: {Path.GetFileName(outputFile)}");
-        Console.WriteLine($"📝 Сообщений: {allMessages.Count:N0}");
-        Console.WriteLine($"📦 Размер: {fileSizeKB:N0} КБ ({fileSizeKB / 1024:N2} МБ)");
-        Console.WriteLine($"📂 Сохранен в: {folderPath}");
+        Console.WriteLine($"\n✅ DOCX сохранён!");
+        Console.WriteLine($"  Файл: {Path.GetFileName(outputFile)}");
+        Console.WriteLine($"  Размер: {fileSizeKB:N0} КБ ({fileSizeKB / 1024:N2} МБ)");
+    }
+
+    static async Task SaveAsJsonAsync()
+    {
+        Console.WriteLine("\n📄 Создаю JSON-файл...");
+        
+        string outputFile = Path.Combine(outputFolder!, $"{fileNameBase}.json");
+        
+        var jsonData = new
+        {
+            exportDate = DateTime.Now.ToString("dd.MM.yyyy HH:mm"),
+            totalMessages = allMessages.Count,
+            messages = allMessages
+        };
+        
+        var options = new JsonSerializerOptions 
+        { 
+            WriteIndented = true,
+            Encoder = System.Text.Encodings.Web.JavaScriptEncoder.UnsafeRelaxedJsonEscaping
+        };
+        
+        string json = JsonSerializer.Serialize(jsonData, options);
+        await File.WriteAllTextAsync(outputFile, json, Encoding.UTF8);
+        
+        long fileSizeKB = new FileInfo(outputFile).Length / 1024;
+        Console.WriteLine($"✅ JSON сохранён!");
+        Console.WriteLine($"  Файл: {Path.GetFileName(outputFile)}");
+        Console.WriteLine($"  Размер: {fileSizeKB:N0} КБ");
+    }
+
+    static async Task SaveAsCsvAsync()
+{
+    Console.WriteLine("\n📄 Создаю CSV-файл...");
+    
+    string outputFile = Path.Combine(outputFolder!, $"{fileNameBase}.csv");
+    
+    var csv = new StringBuilder();
+    
+    // Заголовки столбцов (каждый в отдельной ячейке)
+    csv.AppendLine("Дата;Время;Отправитель;Сообщение");
+    
+    int counter = 0;
+    int progressStep = Math.Max(1000, allMessages.Count / 100);
+    
+    foreach (var msg in allMessages)
+    {
+        counter++;
+        
+        // Разделяем дату и время
+        string date = "";
+        string time = "";
+        
+        if (!string.IsNullOrEmpty(msg.Date))
+        {
+            var parts = msg.Date.Split(' ');
+            if (parts.Length >= 2)
+            {
+                date = parts[0]; // "23.06.2023"
+                time = parts[1]; // "13:34"
+            }
+            else
+            {
+                date = msg.Date;
+            }
+        }
+        
+        // Экранируем кавычки и точки с запятой в сообщении
+        string text = msg.Text
+            .Replace(";", ",")  // Заменяем ; на , чтобы не ломать CSV
+            .Replace("\"", "\"\""); // Экранируем кавычки
+        
+        // Записываем строку с разделителями ;
+        csv.AppendLine($"{date};{time};{msg.Sender};{text}");
+        
+        if (counter % progressStep == 0)
+        {
+            int percent = (int)((double)counter / allMessages.Count * 100);
+            Console.Write($"\r  Прогресс: {percent}%");
+        }
+    }
+    
+    Console.Write($"\r  Прогресс: 100%");
+    Console.WriteLine();
+    
+    await File.WriteAllTextAsync(outputFile, csv.ToString(), Encoding.UTF8);
+    
+    long fileSizeKB = new FileInfo(outputFile).Length / 1024;
+    Console.WriteLine($"✅ CSV сохранён!");
+    Console.WriteLine($"  Файл: {Path.GetFileName(outputFile)}");
+    Console.WriteLine($"  Размер: {fileSizeKB:N0} КБ");
+}
+
+    static void ShowStatistics()
+    {
+        Console.WriteLine("\n📊 СТАТИСТИКА ЧАТА");
+        Console.WriteLine(new string('=', 50));
+        
+        Console.WriteLine($"\n📝 Общее количество сообщений: {allMessages.Count:N0}");
+        
+        var dates = allMessages.Select(m => m.Date.Split(' ')[0]).ToList();
+        var dateGroups = dates.GroupBy(d => d).OrderBy(g => g.Key);
+        
+        Console.WriteLine($"\n📅 Период: {dateGroups.First().Key} — {dateGroups.Last().Key}");
+        Console.WriteLine($"   Всего дней: {dateGroups.Count()}");
+        
+        Console.WriteLine("\n📆 Самые активные дни (топ-10):");
+        foreach (var group in dateGroups.OrderByDescending(g => g.Count()).Take(10))
+        {
+            Console.WriteLine($"   {group.Key}: {group.Count():N0} сообщений");
+        }
+        
+        var senderGroups = allMessages.GroupBy(m => m.Sender)
+            .OrderByDescending(g => g.Count())
+            .ToList();
+        
+        Console.WriteLine($"\n👥 Участников: {senderGroups.Count}");
+        Console.WriteLine("\n🏆 Активность участников:");
+        int rank = 1;
+        foreach (var group in senderGroups.Take(10))
+        {
+            double percent = (double)group.Count() / allMessages.Count * 100;
+            Console.WriteLine($"   {rank}. {group.Key}: {group.Count():N0} сообщений ({percent:F1}%)");
+            rank++;
+        }
+        
+        int textMessages = allMessages.Count(m => !m.Text.StartsWith("["));
+        int mediaMessages = allMessages.Count - textMessages;
+        
+        Console.WriteLine($"\n📎 Типы сообщений:");
+        Console.WriteLine($"   Текстовые: {textMessages:N0} ({100.0 * textMessages / allMessages.Count:F1}%)");
+        Console.WriteLine($"   Медиа: {mediaMessages:N0} ({100.0 * mediaMessages / allMessages.Count:F1}%)");
+        
+        double avgLength = allMessages.Average(m => m.Text.Length);
+        Console.WriteLine($"\n📏 Средняя длина сообщения: {avgLength:F0} символов");
+        
+        var longest = allMessages.OrderByDescending(m => m.Text.Length).First();
+        Console.WriteLine($"\n📄 Самое длинное сообщение: {longest.Text.Length} символов");
+        Console.WriteLine($"   От: {longest.Sender}");
+        Console.WriteLine($"   Дата: {longest.Date}");
+        Console.WriteLine($"   Текст: {longest.Text.Substring(0, Math.Min(100, longest.Text.Length))}...");
+        
+        Console.WriteLine("\n" + new string('=', 50));
+    }
+
+    static async Task ExportByDateAsync()
+    {
+        Console.WriteLine("\n📅 Экспорт по дате");
+        Console.Write("Введите дату в формате ДД.ММ.ГГГГ (например, 23.06.2023): ");
+        string? dateInput = Console.ReadLine()?.Trim();
+        
+        if (string.IsNullOrEmpty(dateInput))
+        {
+            Console.WriteLine("Дата не введена.");
+            return;
+        }
+        
+        var filtered = allMessages.Where(m => m.Date.StartsWith(dateInput)).ToList();
+        
+        if (filtered.Count == 0)
+        {
+            Console.WriteLine($"Сообщений за {dateInput} не найдено.");
+            return;
+        }
+        
+        Console.WriteLine($"Найдено сообщений: {filtered.Count:N0}");
+        
+        Console.Write("Введите название файла (Enter = default): ");
+        string? fileName = Console.ReadLine()?.Trim();
+        if (string.IsNullOrEmpty(fileName))
+            fileName = $"export_{dateInput.Replace(".", "_")}";
+        
+        string outputFile = Path.Combine(outputFolder!, $"{fileName}.txt");
+        await WriteMessagesToTxtAsync(outputFile, filtered);
+        
+        Console.WriteLine($"✅ Сохранено в: {outputFile}");
+    }
+
+    static async Task SaveAllFormatsAsync()
+    {
+        Console.WriteLine("\n📦 Сохраняю ВСЕ форматы...");
+        Console.WriteLine(new string('-', 40));
+        
+        await SaveAsTxtAsync();
+        Console.WriteLine(new string('-', 40));
+        await SaveAsDocxAsync();
+        Console.WriteLine(new string('-', 40));
+        await SaveAsJsonAsync();
+        Console.WriteLine(new string('-', 40));
+        await SaveAsCsvAsync();
+        Console.WriteLine(new string('-', 40));
+        ShowStatistics();
+        
+        Console.WriteLine("\n✅ Все форматы сохранены!");
+        Console.WriteLine($"📂 Папка: {outputFolder}");
+    }
+
+    // ========== ВСПОМОГАТЕЛЬНЫЕ ФУНКЦИИ ==========
+
+    static int ExtractNumber(string filePath)
+    {
+        string fileName = Path.GetFileNameWithoutExtension(filePath);
+        
+        if (fileName.Equals("messages", StringComparison.OrdinalIgnoreCase))
+            return 0;
+        
+        var match = Regex.Match(fileName, @"messages(\d+)", RegexOptions.IgnoreCase);
+        if (match.Success && int.TryParse(match.Groups[1].Value, out int number))
+            return number;
+        
+        return int.MaxValue;
     }
 
     static async Task WriteMessagesToTxtAsync(string filePath, List<Message> messages)
